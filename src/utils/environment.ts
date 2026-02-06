@@ -71,11 +71,11 @@ export const getSkyGradient = (phase: TimePhase, weather: string, theme: ColorTh
 
   // Midnight (Default Blue/Indigo)
   switch (phase) {
-    case 'morning': return 'linear-gradient(to top, #bfdbfe, #dbeafe)'; // Light Blue 200-100
-    case 'noon': return 'linear-gradient(to top, #bae6fd, #e0f2fe)'; // Sky 200-100
-    case 'afternoon': return 'linear-gradient(to top, #7dd3fc, #bae6fd)'; // Sky 300-200
-    case 'dusk': return 'linear-gradient(to top, #fdba74, #fca5a5)'; // Orange 300 -> Red 300 (Sunset)
-    case 'night': return 'linear-gradient(to top, #1e1b4b, #312e81)'; // Indigo 950-900 (Deep but visible)
-    default: return 'linear-gradient(to top, #1e293b, #0f172a)';
+    case 'morning': return 'linear-gradient(to top, #85b3cb, #aad9f2)'; // 200 -> 100
+    case 'noon': return 'linear-gradient(to top, #aad9f2, #d1ffff)'; // 100 -> 50
+    case 'afternoon': return 'linear-gradient(to top, #61909b, #85b3cb)'; // M300 -> 200
+    case 'dusk': return 'linear-gradient(to top, #2E5A6F, #3e6d77)'; // 500 -> M400
+    case 'night': return 'linear-gradient(to top, #000708, #001617)'; // S900 -> S800
+    default: return 'linear-gradient(to top, #000708, #001617)';
   }
 };

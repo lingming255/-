@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useGameStore, Goal } from '../store/gameStore';
-import { Download, Cloud, Sun, CloudRain, Snowflake, CheckCircle, Book, ArrowUp, X, Palette, Globe, Paintbrush, Edit2, Trash2, Save, Map } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import confetti from 'canvas-confetti';
+import { Download, Cloud, Sun, CloudRain, Snowflake, CheckCircle, Book, ArrowUp, X, Palette, Globe, Paintbrush, Edit2, Trash2, Save, Map, Plus, Square, CheckSquare } from 'lucide-react';
 import { EnvironmentType, ColorTheme } from '../store/gameStore';
 
 interface UIProps {
@@ -17,7 +19,8 @@ const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) =
     environment, setEnvironment,
     colorTheme, setColorTheme,
     updateDailyLog, deleteDailyLog,
-    updateGoal, deleteGoal
+    updateGoal, deleteGoal,
+    addSubGoal, toggleSubGoal, deleteSubGoal
   } = useGameStore();
   
   const activeGoal = goals.find(g => g.id === activeGoalId);
@@ -35,6 +38,54 @@ const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) =
   const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
   const [isEditingGoal, setIsEditingGoal] = useState(false);
   const [editGoalContent, setEditGoalContent] = useState('');
+
+  // Subgoal input for Modal
+  const [modalSubInput, setModalSubInput] = useState('');
+
+  const triggerCelebration = () => {
+    // 方案 1: 经典的抛洒庆祝 (Confetti)
+    const count = 200;
+    const defaults = {
+      origin: { y: 0.7 },
+      zIndex: 9999, // Ensure it's on top of everything
+    };
+
+    function fire(particleRatio: number, opts: confetti.Options) {
+      confetti({
+        ...defaults,
+        ...opts,
+        particleCount: Math.floor(count * particleRatio),
+      });
+    }
+
+    fire(0.25, {
+      spread: 26,
+      startVelocity: 55,
+    });
+    fire(0.2, {
+      spread: 60,
+    });
+    fire(0.35, {
+      spread: 100,
+      decay: 0.91,
+      scalar: 0.8,
+    });
+    fire(0.1, {
+      spread: 120,
+      startVelocity: 25,
+      decay: 0.92,
+      scalar: 1.2,
+    });
+    fire(0.1, {
+      spread: 120,
+      startVelocity: 45,
+    });
+  };
+
+  const handleCompleteGoal = (id: string) => {
+      triggerCelebration();
+      completeGoal(id);
+  };
 
   const handleSetGoal = (e: React.FormEvent) => {
     e.preventDefault();
@@ -139,10 +190,17 @@ const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) =
       <div className="flex justify-between items-start pointer-events-auto">
         {/* Goal Section */}
         <div className="flex-1 flex justify-center">
+          <AnimatePresence mode="wait">
           {activeGoal ? (
-            <div 
-              className={`bg-black/20 backdrop-blur-md px-6 py-3 rounded-full border border-white/10 text-white cursor-pointer hover:bg-white/10 transition group flex items-center gap-2 ${activeGoal.isToday ? 'border-amber-400/50 shadow-[0_0_15px_rgba(251,191,36,0.1)]' : ''}`}
-              onClick={() => completeGoal(activeGoal.id)}
+            <motion.div 
+              key="active-goal"
+              initial={{ opacity: 0, y: -20, scale: 0.9 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9, filter: 'blur(10px)' }}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.95 }}
+              className={`bg-black/40 backdrop-blur-md px-6 py-3 rounded-full border border-white/10 text-white cursor-pointer hover:bg-white/10 transition group flex items-center gap-2 ${activeGoal.isToday ? 'border-amber-400/50 shadow-[0_0_15px_rgba(251,191,36,0.1)]' : ''}`}
+              onClick={() => handleCompleteGoal(activeGoal.id)}
               title="Click to complete"
             >
               {activeGoal.isToday && <Sun size={14} className="text-amber-400 fill-amber-400/20" />}
@@ -150,13 +208,19 @@ const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) =
               <span className="hidden group-hover:inline ml-2 text-green-400 opacity-0 group-hover:opacity-100 transition">
                 <CheckCircle className="inline w-4 h-4" />
               </span>
-            </div>
+            </motion.div>
           ) : (
-            <form onSubmit={handleSetGoal} className="pointer-events-auto flex gap-2">
+            <motion.form 
+              key="goal-form"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              onSubmit={handleSetGoal} 
+              className="pointer-events-auto flex gap-2"
+            >
                <button 
                 type="button"
                 onClick={onOpenMap}
-                className="bg-black/20 backdrop-blur-md px-4 py-3 rounded-full border border-white/10 text-white hover:bg-white/10 transition flex items-center gap-2"
+                className="bg-black/40 backdrop-blur-md px-4 py-3 rounded-full border border-white/10 text-white hover:bg-white/10 transition flex items-center gap-2"
               >
                 <Map size={18} />
                 <span>Select Goal</span>
@@ -166,10 +230,11 @@ const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) =
                 value={goalInput}
                 onChange={(e) => setGoalInput(e.target.value)}
                 placeholder="Or create new..."
-                className="bg-black/20 backdrop-blur-md px-6 py-3 rounded-full border border-white/10 text-white placeholder-white/70 focus:outline-none focus:ring-1 focus:ring-white/30 text-center w-60 transition"
+                className="bg-black/40 backdrop-blur-md px-6 py-3 rounded-full border border-white/10 text-white placeholder-white/70 focus:outline-none focus:ring-1 focus:ring-white/30 text-center w-60 transition"
               />
-            </form>
+            </motion.form>
           )}
+          </AnimatePresence>
         </div>
 
         {/* Tools */}
@@ -178,7 +243,7 @@ const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) =
              <>
                <button 
                  onClick={onOpenMap}
-                 className="p-2 rounded-full bg-black/20 hover:bg-white/10 text-white transition"
+                 className="p-2 rounded-full bg-black/40 hover:bg-black/60 border border-white/10 backdrop-blur-sm text-white transition shadow-sm"
                  title="Open Goal Map"
                >
                  <Map size={20} />
@@ -188,14 +253,14 @@ const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) =
            )}
            <button 
              onClick={toggleEnvironment}
-             className="p-2 rounded-full bg-black/20 hover:bg-white/10 text-white transition"
+             className="p-2 rounded-full bg-black/40 hover:bg-black/60 border border-white/10 backdrop-blur-sm text-white transition shadow-sm"
              title={`Change Environment (Current: ${environment})`}
            >
              <Globe size={20} />
            </button>
            <button 
              onClick={toggleColorTheme}
-             className="p-2 rounded-full bg-black/20 hover:bg-white/10 text-white transition"
+             className="p-2 rounded-full bg-black/40 hover:bg-black/60 border border-white/10 backdrop-blur-sm text-white transition shadow-sm"
              title={`Change Theme (Current: ${colorTheme})`}
            >
              <Paintbrush size={20} />
@@ -325,20 +390,78 @@ const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) =
       {/* Daily Engrave Modal (New Design) */}
       {showLogInput && (
           <div className="absolute inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center pointer-events-auto z-50">
-             <div className="w-[600px] max-w-[90vw] flex flex-col gap-4 animate-in fade-in zoom-in duration-200">
+             <div className="w-[600px] max-w-[90vw] flex flex-col gap-4 animate-in fade-in zoom-in duration-200 max-h-[90vh]">
                 <div className="text-white/60 text-center text-sm font-mono tracking-widest uppercase">
                     Engrave your chronicle
                 </div>
-                <form onSubmit={handleLog} className="flex flex-col gap-4">
+
+                {/* Active Goal Sub-goals Section in Modal */}
+                {activeGoal && (
+                    <div className="bg-black/40 backdrop-blur-xl p-4 rounded-2xl border border-white/10 flex flex-col gap-2 shrink-0">
+                        <div className="flex justify-between items-center text-white/50 text-xs font-mono tracking-widest uppercase border-b border-white/5 pb-2">
+                            <span>Daily Targets: <span className="text-white">{activeGoal.content}</span></span>
+                            <span>{activeGoal.subGoals?.filter(sg => sg.isCompleted).length || 0}/{activeGoal.subGoals?.length || 0}</span>
+                        </div>
+                        
+                        <div className="flex flex-col gap-1 max-h-[150px] overflow-y-auto pr-1 custom-scrollbar">
+                            {(activeGoal.subGoals || []).map(sg => (
+                                <div key={sg.id} className="flex items-center gap-3 text-sm group px-2 py-1 rounded hover:bg-white/5 transition">
+                                    <button 
+                                        onClick={() => toggleSubGoal(activeGoal.id, sg.id)}
+                                        className={`transition ${sg.isCompleted ? 'text-green-400' : 'text-white/30 hover:text-white'}`}
+                                    >
+                                        {sg.isCompleted ? <CheckSquare size={16} /> : <Square size={16} />}
+                                    </button>
+                                    <span className={`flex-1 ${sg.isCompleted ? 'line-through text-white/30' : 'text-white/80'}`}>
+                                        {sg.content}
+                                    </span>
+                                    <button 
+                                        onClick={() => deleteSubGoal(activeGoal.id, sg.id)}
+                                        className="opacity-0 group-hover:opacity-100 text-white/20 hover:text-red-400 transition"
+                                    >
+                                        <X size={14} />
+                                    </button>
+                                </div>
+                            ))}
+                            {(!activeGoal.subGoals || activeGoal.subGoals.length === 0) && (
+                                <div className="text-white/20 text-xs italic text-center py-2">No sub-goals set. Break it down.</div>
+                            )}
+                        </div>
+
+                        <form 
+                            onSubmit={(e) => {
+                                e.preventDefault();
+                                if (modalSubInput.trim()) {
+                                    addSubGoal(activeGoal.id, modalSubInput);
+                                    setModalSubInput('');
+                                }
+                            }}
+                            className="flex gap-2 mt-1"
+                        >
+                            <input 
+                                type="text" 
+                                value={modalSubInput}
+                                onChange={(e) => setModalSubInput(e.target.value)}
+                                placeholder="Add a quick task..."
+                                className="flex-1 bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-white/30 transition"
+                            />
+                            <button type="submit" className="p-1.5 rounded bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition">
+                                <Plus size={16} />
+                            </button>
+                        </form>
+                    </div>
+                )}
+
+                <form onSubmit={handleLog} className="flex flex-col gap-4 flex-1 min-h-0">
                   <textarea
                     value={logInput}
                     onChange={(e) => setLogInput(e.target.value)}
                     onKeyDown={handleKeyDown}
                     placeholder="What steps did you ascend today?..."
-                    className="bg-black/40 backdrop-blur-xl p-8 rounded-2xl border border-white/10 text-white text-xl placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-white/20 w-full h-64 resize-none shadow-2xl leading-relaxed"
+                    className="bg-black/40 backdrop-blur-xl p-8 rounded-2xl border border-white/10 text-white text-xl placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-white/20 w-full resize-none shadow-2xl leading-relaxed flex-1 min-h-[150px]"
                     autoFocus
                   />
-                  <div className="flex justify-between items-center px-2">
+                  <div className="flex justify-between items-center px-2 shrink-0">
                     <div className="text-xs text-white/30">
                         <span className="bg-white/10 px-1.5 py-0.5 rounded border border-white/5">Ctrl + Enter</span> to save
                         <span className="mx-2">|</span>

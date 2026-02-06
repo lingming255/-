@@ -1,6 +1,6 @@
-import React from 'react';
-import { Goal } from '../../store/gameStore';
-import { Sun, CheckCircle, Crosshair, Trash2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { Goal, useGameStore } from '../../store/gameStore';
+import { Sun, CheckCircle, Crosshair, Trash2, ChevronDown, ChevronRight, Plus, X, Square, CheckSquare } from 'lucide-react';
 
 interface GoalNodeProps {
   goal: Goal;
@@ -23,6 +23,18 @@ export const GoalNode: React.FC<GoalNodeProps> = ({
   onDelete,
   onUnlink,
 }) => {
+  const { addSubGoal, toggleSubGoal, deleteSubGoal } = useGameStore();
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [subInput, setSubInput] = useState('');
+
+  const handleAddSub = (e: React.FormEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!subInput.trim()) return;
+    addSubGoal(goal.id, subInput);
+    setSubInput('');
+  };
+
   return (
     <div
       className={`absolute flex flex-col items-center group select-none touch-none`}
@@ -100,6 +112,53 @@ export const GoalNode: React.FC<GoalNodeProps> = ({
           {goal.content}
         </div>
         
+        {/* Sub-goals Section */}
+        <div className="mt-2 pt-2 border-t border-white/10 flex flex-col gap-1" onPointerDown={(e) => e.stopPropagation()}>
+          <button 
+            onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
+            className="flex items-center gap-1 text-xs text-white/50 hover:text-white transition w-full justify-center"
+          >
+            {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span>{goal.subGoals?.length || 0} Sub-goals</span>
+          </button>
+          
+          {isExpanded && (
+            <div className="flex flex-col gap-1 mt-1 animate-in fade-in slide-in-from-top-2 duration-200">
+              {(goal.subGoals || []).map(sg => (
+                <div key={sg.id} className="flex items-center gap-2 text-xs group/sub px-1">
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); toggleSubGoal(goal.id, sg.id); }}
+                        className={`hover:text-white transition ${sg.isCompleted ? 'text-green-400' : 'text-white/30'}`}
+                    >
+                        {sg.isCompleted ? <CheckSquare size={12} /> : <Square size={12} />}
+                    </button>
+                    <span className={`flex-1 text-left break-words ${sg.isCompleted ? 'line-through text-white/30' : 'text-white/80'}`}>{sg.content}</span>
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); deleteSubGoal(goal.id, sg.id); }}
+                        className="opacity-0 group-hover/sub:opacity-100 text-white/20 hover:text-red-400 transition"
+                    >
+                        <X size={12} />
+                    </button>
+                </div>
+              ))}
+              <form onSubmit={handleAddSub} className="flex gap-1 mt-1 px-1">
+                <input 
+                    type="text" 
+                    value={subInput}
+                    onChange={(e) => setSubInput(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                    placeholder="New sub-goal..."
+                    className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-white/30 transition"
+                />
+                <button type="submit" onClick={(e) => e.stopPropagation()} className="p-1 rounded hover:bg-white/10 text-white/50 hover:text-white transition">
+                    <Plus size={12} />
+                </button>
+              </form>
+            </div>
+          )}
+        </div>
+
         {/* Connection Handle (Bottom) */}
         <div 
             className="absolute -bottom-3 left-1/2 -translate-x-1/2 w-8 h-8 flex items-center justify-center cursor-crosshair opacity-0 group-hover:opacity-100 transition z-10"

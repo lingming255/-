@@ -11,6 +11,12 @@ export interface DailyLog {
   linkedGoalId?: string | null; // Link to the specific goal ID
 }
 
+export interface SubGoal {
+  id: string;
+  content: string;
+  isCompleted: boolean;
+}
+
 export interface Goal {
   id: string;
   content: string;
@@ -19,6 +25,7 @@ export interface Goal {
   completedAt?: string;
   createdAt: string;
   isToday: boolean;
+  subGoals: SubGoal[];
   position: { x: number; y: number };
 }
 
@@ -45,6 +52,11 @@ export interface GameState {
   setActiveGoal: (id: string | null) => void;
   completeGoal: (id: string) => void;
   toggleGoalToday: (id: string) => void;
+  
+  // SubGoal Actions
+  addSubGoal: (goalId: string, content: string) => void;
+  toggleSubGoal: (goalId: string, subGoalId: string) => void;
+  deleteSubGoal: (goalId: string, subGoalId: string) => void;
   
   // Legacy Wrappers (to maintain compatibility with some UI calls if needed, though we'll update UI)
   // We'll update the UI to use the new actions.
@@ -83,6 +95,7 @@ export const useGameStore = create<GameState>()(
           isCompleted: false,
           createdAt: new Date().toISOString(),
           isToday: false,
+          subGoals: [],
           position,
         };
         // If it's the first goal, make it active automatically
@@ -93,6 +106,54 @@ export const useGameStore = create<GameState>()(
           activeGoalId: shouldActivate ? newGoal.id : get().activeGoalId
         });
         return newGoal.id;
+      },
+
+      addSubGoal: (goalId, content) => {
+        const { goals } = get();
+        set({
+          goals: goals.map(g => {
+            if (g.id !== goalId) return g;
+            return {
+              ...g,
+              subGoals: [
+                ...(g.subGoals || []),
+                {
+                  id: generateId(),
+                  content,
+                  isCompleted: false
+                }
+              ]
+            };
+          })
+        });
+      },
+
+      toggleSubGoal: (goalId, subGoalId) => {
+        const { goals } = get();
+        set({
+          goals: goals.map(g => {
+            if (g.id !== goalId) return g;
+            return {
+              ...g,
+              subGoals: (g.subGoals || []).map(sg => 
+                sg.id === subGoalId ? { ...sg, isCompleted: !sg.isCompleted } : sg
+              )
+            };
+          })
+        });
+      },
+
+      deleteSubGoal: (goalId, subGoalId) => {
+        const { goals } = get();
+        set({
+          goals: goals.map(g => {
+            if (g.id !== goalId) return g;
+            return {
+              ...g,
+              subGoals: (g.subGoals || []).filter(sg => sg.id !== subGoalId)
+            };
+          })
+        });
       },
 
       updateGoal: (id, updates) => {
@@ -123,7 +184,17 @@ export const useGameStore = create<GameState>()(
         });
       },
 
-      setActiveGoal: (id) => set({ activeGoalId: id }),
+      setActiveGoal: (id) => {
+        const { goals } = get();
+        if (id) {
+          set({
+            activeGoalId: id,
+            goals: goals.map(g => g.id === id ? { ...g, isCompleted: false, completedAt: undefined } : g)
+          });
+        } else {
+          set({ activeGoalId: null });
+        }
+      },
 
       completeGoal: (id) => {
         const { goals, activeGoalId } = get();
@@ -227,7 +298,8 @@ export const useGameStore = create<GameState>()(
               goals = oldState.goals.map((g: any) => ({
                   ...g,
                   parentIds: g.parentIds || (g.parentId ? [g.parentId] : []),
-                  parentId: undefined
+                  parentId: undefined,
+                  subGoals: g.subGoals || []
               }));
               activeGoalId = oldState.activeGoalId;
           } else {
@@ -242,6 +314,7 @@ export const useGameStore = create<GameState>()(
                      isCompleted: false,
                      createdAt: new Date().toISOString(),
                      isToday: true, 
+                     subGoals: [],
                      position: { x: 0, y: 0 }
                  });
                  activeGoalId = newId;
@@ -258,6 +331,7 @@ export const useGameStore = create<GameState>()(
                           completedAt: cg.completedAt,
                           createdAt: cg.completedAt,
                           isToday: false,
+                          subGoals: [],
                           position: { x: (index + 1) * 200, y: 0 }
                       });
                   });
