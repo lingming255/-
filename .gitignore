@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+AscensionStairs-Software/
+
+.cache/
+AscensionStairs-Release/
+dist-electron/
+*.zip

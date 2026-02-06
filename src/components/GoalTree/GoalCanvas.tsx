@@ -1,7 +1,10 @@
 import React, { useState, useRef, useMemo } from 'react';
 import { useGameStore, Goal } from '../../store/gameStore';
 import { GoalNode } from './GoalNode';
-import { X, Plus, Locate } from 'lucide-react';
+import { CustomPrompt } from '../CustomPrompt';
+import { ProjectSidebar } from './ProjectSidebar';
+import { getSubTreeIds, getAncestors } from '../../utils/treeHelpers';
+import { X, Plus, Locate, Home, ChevronRight as ChevronRightIcon } from 'lucide-react';
 
 interface GoalCanvasProps {
   onClose: () => void;
@@ -15,7 +18,9 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
     setActiveGoal, 
     toggleGoalToday, 
     addGoal, 
-    deleteGoal 
+    deleteGoal,
+    focusedGoalId,
+    setFocusedGoalId
   } = useGameStore();
 
   const [view, setView] = useState({ x: window.innerWidth / 2, y: 100, scale: 1 });
@@ -26,8 +31,21 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
   const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 }); // Screen coords for line
   
   const [hoveredTargetId, setHoveredTargetId] = useState<string | null>(null);
+  const [isPromptOpen, setIsPromptOpen] = useState(false);
   
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Focus Mode Logic
+  const visibleGoals = useMemo(() => {
+    if (!focusedGoalId) return goals;
+    const ids = getSubTreeIds(focusedGoalId, goals);
+    return goals.filter(g => ids.has(g.id));
+  }, [goals, focusedGoalId]);
+
+  const breadcrumbs = useMemo(() => {
+    if (!focusedGoalId) return [];
+    return getAncestors(focusedGoalId, goals);
+  }, [focusedGoalId, goals]);
 
   // Helper to convert screen to world coordinates
   const screenToWorld = (sx: number, sy: number) => {
@@ -99,7 +117,7 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
        
        // Hit Test for highlighting
        const worldPos = screenToWorld(e.clientX, e.clientY);
-       const target = goals.find(g => {
+       const target = visibleGoals.find(g => {
          if (g.id === connectingId) return false;
          return (
            worldPos.x >= g.position.x && 
@@ -135,7 +153,7 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
       // Hit Test
       const worldPos = screenToWorld(e.clientX, e.clientY);
       // We check all nodes to see if we dropped on one
-      const target = goals.find(g => {
+      const target = visibleGoals.find(g => {
         if (g.id === connectingId) return false; // Can't link to self
         return (
           worldPos.x >= g.position.x && 
@@ -146,15 +164,6 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
       });
 
       if (target) {
-        // We are dragging FROM connectingId TO target.id
-        // So target.id should be the PARENT of connectingId?
-        // OR connectingId should be the PARENT of target.id?
-        
-        // Visual Logic: "Drag to link to child" tooltip on handle.
-        // So we are dragging FROM Parent Handle TO Child Node.
-        // connectingId = Parent
-        // target.id = Child
-        
         // Check if connection already exists to avoid duplicates
         if (!target.parentIds.includes(connectingId)) {
             const newParentIds = [...target.parentIds, connectingId];
@@ -168,46 +177,36 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
     }
   };
 
-  const handleAddGoal = (e: React.MouseEvent) => {
-    e.stopPropagation(); // Prevent event from bubbling to canvas
-    console.log("handleAddGoal clicked");
-    
-    try {
-        let content: string | null = null;
+  const handleAddGoalClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsPromptOpen(true);
+  };
+
+  const handlePromptConfirm = (content: string) => {
+    if (content && content.trim()) {
+        const cx = window.innerWidth / 2;
+        const cy = window.innerHeight / 2;
+        let pos = { x: 0, y: 0 };
+        
         try {
-            content = prompt("Enter goal content:");
+            const center = screenToWorld(cx, cy);
+            pos = { x: center.x - 110, y: center.y - 40 };
         } catch (err) {
-            console.warn("Prompt failed, using default:", err);
-            content = "New Goal";
+            console.warn("screenToWorld failed, using zero:", err);
         }
 
-        if (content) {
-            // Safe center calculation
-            const cx = window.innerWidth / 2;
-            const cy = window.innerHeight / 2;
-            let pos = { x: 0, y: 0 };
-            
-            try {
-                const center = screenToWorld(cx, cy);
-                pos = { x: center.x - 110, y: center.y - 40 };
-            } catch (err) {
-                console.warn("screenToWorld failed, using zero:", err);
-            }
+        // If in focus mode, add as child of focused goal?
+        // User might expect this.
+        const parentId = focusedGoalId;
 
-            const newId = addGoal(content, null, pos);
-            console.log("Goal added:", newId);
-            
-            // Optional: Set as active immediately?
-            // setActiveGoal(newId); 
-        }
-    } catch (error) {
-        console.error("Critical error in handleAddGoal:", error);
-        alert("Error creating goal. Check console.");
+        const newId = addGoal(content, parentId, pos);
+        console.log("Goal added:", newId);
     }
+    setIsPromptOpen(false);
   };
   
   const centerOnActive = () => {
-      const active = goals.find(g => g.id === activeGoalId);
+      const active = visibleGoals.find(g => g.id === activeGoalId);
       if (active) {
           setView({
               x: window.innerWidth / 2 - active.position.x * view.scale - 110 * view.scale,
@@ -217,36 +216,86 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
       }
   };
 
+  const handleSelectProject = (id: string) => {
+    setFocusedGoalId(null); // Exit focus mode
+    const node = goals.find(g => g.id === id);
+    if (node) {
+        setView({
+           x: window.innerWidth / 2 - node.position.x * view.scale - 110 * view.scale,
+           y: 100, // Top align
+           scale: 1
+        });
+    }
+  };
+
   // Draw Lines
   const connections = useMemo(() => {
-    return goals.flatMap(g => {
+    return visibleGoals.flatMap(g => {
       if (!g.parentIds || g.parentIds.length === 0) return [];
       return g.parentIds.map(parentId => {
-          const parent = goals.find(p => p.id === parentId);
+          // If in focus mode, ensure parent is also visible
+          const parent = visibleGoals.find(p => p.id === parentId);
           if (!parent) return null;
           return { from: parent, to: g };
       }).filter(Boolean);
     }) as { from: Goal, to: Goal }[];
-  }, [goals]);
+  }, [visibleGoals]);
 
   return (
     <div className="fixed inset-0 z-50 bg-[#0f172a] overflow-hidden text-white font-sans animate-in fade-in duration-300">
+      
+      {/* Sidebar */}
+      <ProjectSidebar goals={goals} onSelectProject={handleSelectProject} />
+
+      {/* Breadcrumbs Bar */}
+      {focusedGoalId && (
+        <div className="absolute top-0 left-0 right-0 h-14 bg-slate-900/80 backdrop-blur-md border-b border-white/10 z-40 flex items-center px-4 md:pl-72 animate-in slide-in-from-top">
+            <button 
+                onClick={() => setFocusedGoalId(null)}
+                className="p-1 hover:bg-white/10 rounded mr-2 text-white/50 hover:text-white transition"
+            >
+                <Home size={18} />
+            </button>
+            <div className="flex items-center gap-1 text-sm overflow-hidden">
+                {breadcrumbs.map((crumb, i) => (
+                    <React.Fragment key={crumb.id}>
+                        {i > 0 && <ChevronRightIcon size={14} className="text-white/30" />}
+                        <button 
+                            onClick={() => setFocusedGoalId(crumb.id)}
+                            className="hover:text-white text-white/70 truncate max-w-[150px] transition"
+                        >
+                            {crumb.content}
+                        </button>
+                    </React.Fragment>
+                ))}
+            </div>
+        </div>
+      )}
+
       {/* Toolbar */}
-      <div className="absolute top-4 left-4 z-50 flex gap-2">
-        <button onClick={onClose} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition">
-          <X size={24} />
-        </button>
-        <button onClick={handleAddGoal} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition flex items-center gap-2" title="Add New Goal">
+      <div className="absolute top-4 right-4 z-50 flex gap-2">
+        <button onClick={handleAddGoalClick} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition flex items-center gap-2" title="Add New Goal">
           <Plus size={24} />
           <span className="text-sm font-medium pr-2">New Goal</span>
         </button>
         <button onClick={centerOnActive} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition" title="Locate Active">
             <Locate size={24} />
         </button>
-        <div className="bg-black/40 px-4 py-2 rounded-full text-xs text-white/50 border border-white/5 pointer-events-none select-none">
-            Drag background to pan • Scroll to zoom • Drag handles to link
-        </div>
+        <button onClick={onClose} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition">
+          <X size={24} />
+        </button>
       </div>
+      
+      <div className="absolute bottom-4 right-4 bg-black/40 px-4 py-2 rounded-full text-xs text-white/50 border border-white/5 pointer-events-none select-none z-40">
+            Double-click node to Focus • Drag background to pan • Scroll to zoom
+      </div>
+
+      <CustomPrompt 
+        isOpen={isPromptOpen}
+        title="Create New Goal"
+        onConfirm={handlePromptConfirm}
+        onCancel={() => setIsPromptOpen(false)}
+      />
 
       {/* Canvas Area */}
       <div 
@@ -298,7 +347,7 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
              {/* Temporary Connection Line */}
              {connectingId && (
                 (() => {
-                   const startNode = goals.find(g => g.id === connectingId);
+                   const startNode = visibleGoals.find(g => g.id === connectingId);
                    if (!startNode) return null;
                    
                    const startX = startNode.position.x + 110;
@@ -323,7 +372,7 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
 
           {/* Nodes Layer */}
           <div className="pointer-events-auto">
-              {goals.map(goal => (
+              {visibleGoals.map(goal => (
                 <GoalNode
                   key={goal.id}
                   goal={goal}
@@ -334,6 +383,7 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
                   onSetActive={() => setActiveGoal(goal.id)}
                   onDelete={() => deleteGoal(goal.id)}
                   onUnlink={() => useGameStore.getState().unlinkGoal(goal.id)}
+                  onFocus={() => setFocusedGoalId(goal.id)}
                 />
               ))}
           </div>

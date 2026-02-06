@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useGameStore, Goal } from '../store/gameStore';
 import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
-import { Download, Cloud, Sun, CloudRain, Snowflake, CheckCircle, Book, ArrowUp, X, Palette, Globe, Paintbrush, Edit2, Trash2, Save, Map, Plus, Square, CheckSquare } from 'lucide-react';
+import { Download, Upload, Cloud, Sun, CloudRain, Snowflake, CheckCircle, Book, ArrowUp, X, Palette, Globe, Paintbrush, Edit2, Trash2, Save, Map, Plus, Square, CheckSquare, Lock, Map as MapIcon } from 'lucide-react';
 import { EnvironmentType, ColorTheme } from '../store/gameStore';
 
 interface UIProps {
@@ -14,7 +14,7 @@ interface UIProps {
 const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) => {
   const { 
     goals, activeGoalId, addGoal, completeGoal,
-    addDailyLog, exportData, dailyLogs,
+    addDailyLog, exportData, importData, dailyLogs,
     viewMode, setViewMode, stairStyle, setStairStyle,
     environment, setEnvironment,
     colorTheme, setColorTheme,
@@ -25,6 +25,32 @@ const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) =
   
   const activeGoal = goals.find(g => g.id === activeGoalId);
   const completedGoals = goals.filter(g => g.isCompleted);
+  const [shake, setShake] = useState(false);
+
+  // Active Goal Lock Logic
+  const subGoals = activeGoal?.subGoals || [];
+  const totalSub = subGoals.length;
+  const completedSub = subGoals.filter(s => s.isCompleted).length;
+  const isLocked = totalSub > 0 && completedSub < totalSub;
+  const progress = totalSub > 0 ? (completedSub / totalSub) * 100 : 0;
+
+  const getProgressGradient = () => {
+    if (totalSub > 500) return 'from-purple-600 to-indigo-600'; // Legendary
+    if (totalSub > 50) return 'from-amber-400 to-yellow-600'; // Epic
+    return 'from-emerald-500 to-green-600'; // Standard
+  };
+
+  const handleCompleteGoal = () => {
+      if (activeGoalId) {
+          if (isLocked) {
+              setShake(true);
+              setTimeout(() => setShake(false), 500);
+              return;
+          }
+          triggerCelebration();
+          completeGoal(activeGoalId);
+      }
+  };
 
   const [goalInput, setGoalInput] = useState('');
   const [logInput, setLogInput] = useState('');
@@ -64,6 +90,7 @@ const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) =
     });
     fire(0.2, {
       spread: 60,
+      startVelocity: 25,
     });
     fire(0.35, {
       spread: 100,
@@ -82,10 +109,7 @@ const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) =
     });
   };
 
-  const handleCompleteGoal = (id: string) => {
-      triggerCelebration();
-      completeGoal(id);
-  };
+
 
   const handleSetGoal = (e: React.FormEvent) => {
     e.preventDefault();
@@ -184,6 +208,40 @@ const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) =
       }
   };
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const content = e.target?.result as string;
+        const data = JSON.parse(content);
+        const success = importData(data);
+        if (success) {
+          // Optional: Visual feedback could be added here
+          console.log('Import successful');
+        } else {
+          alert('Failed to import data. Invalid format.');
+        }
+      } catch (err) {
+        console.error('Import error:', err);
+        alert('Failed to parse file.');
+      }
+      // Reset input value to allow re-importing same file
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
+  
   return (
     <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-6 z-10">
       {/* Top Bar: Goal & Settings */}
@@ -192,23 +250,20 @@ const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) =
         <div className="flex-1 flex justify-center">
           <AnimatePresence mode="wait">
           {activeGoal ? (
-            <motion.div 
-              key="active-goal"
-              initial={{ opacity: 0, y: -20, scale: 0.9 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9, filter: 'blur(10px)' }}
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.95 }}
-              className={`bg-black/40 backdrop-blur-md px-6 py-3 rounded-full border border-white/10 text-white cursor-pointer hover:bg-white/10 transition group flex items-center gap-2 ${activeGoal.isToday ? 'border-amber-400/50 shadow-[0_0_15px_rgba(251,191,36,0.1)]' : ''}`}
-              onClick={() => handleCompleteGoal(activeGoal.id)}
-              title="Click to complete"
-            >
-              {activeGoal.isToday && <Sun size={14} className="text-amber-400 fill-amber-400/20" />}
-              <span className="text-lg font-light tracking-wider drop-shadow-sm">{activeGoal.content}</span>
-              <span className="hidden group-hover:inline ml-2 text-green-400 opacity-0 group-hover:opacity-100 transition">
-                <CheckCircle className="inline w-4 h-4" />
-              </span>
-            </motion.div>
+             <div className="flex flex-col items-center">
+                 {/* Replaced Top Button with just display, main action is now at bottom */}
+                <div 
+                  className={`bg-black/40 backdrop-blur-md px-6 py-3 rounded-full border border-white/10 text-white flex items-center gap-2 ${activeGoal.isToday ? 'border-amber-400/50 shadow-[0_0_15px_rgba(251,191,36,0.1)]' : ''}`}
+                >
+                  {activeGoal.isToday && <Sun size={14} className="text-amber-400 fill-amber-400/20" />}
+                  <span className="text-lg font-light tracking-wider drop-shadow-sm">{activeGoal.content}</span>
+                  {totalSub > 0 && (
+                       <span className="ml-2 text-xs text-white/50 bg-white/10 px-2 py-0.5 rounded-full">
+                           {completedSub}/{totalSub}
+                       </span>
+                  )}
+                </div>
+             </div>
           ) : (
             <motion.form 
               key="goal-form"
@@ -222,7 +277,7 @@ const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) =
                 onClick={onOpenMap}
                 className="bg-black/40 backdrop-blur-md px-4 py-3 rounded-full border border-white/10 text-white hover:bg-white/10 transition flex items-center gap-2"
               >
-                <Map size={18} />
+                <MapIcon size={18} />
                 <span>Select Goal</span>
               </button>
               <input
@@ -246,7 +301,7 @@ const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) =
                  className="p-2 rounded-full bg-black/40 hover:bg-black/60 border border-white/10 backdrop-blur-sm text-white transition shadow-sm"
                  title="Open Goal Map"
                >
-                 <Map size={20} />
+                 <MapIcon size={20} />
                </button>
                <div className="w-px h-8 bg-white/10 mx-1" /> {/* Divider */}
              </>
@@ -291,7 +346,58 @@ const UI: React.FC<UIProps> = ({ onWeatherToggle, currentWeather, onOpenMap }) =
           <button onClick={exportData} className="p-2 rounded-full bg-black/20 hover:bg-white/10 text-white transition" title="Export Data">
             <Download size={20} />
           </button>
+          <button onClick={handleImportClick} className="p-2 rounded-full bg-black/20 hover:bg-white/10 text-white transition" title="Import Data">
+            <Upload size={20} />
+          </button>
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            onChange={handleFileChange} 
+            accept=".json" 
+            className="hidden" 
+          />
         </div>
+      </div>
+
+      {/* BIG BOTTOM BUTTON (New) */}
+      <div className="absolute bottom-12 left-1/2 -translate-x-1/2 pointer-events-auto flex flex-col items-center gap-4 w-full max-w-xl px-4 z-20">
+         {activeGoal && (
+             <motion.button
+                onClick={handleCompleteGoal}
+                animate={shake ? { x: [-5, 5, -5, 5, 0] } : {}}
+                className="relative w-full h-16 bg-black/40 backdrop-blur-md rounded-2xl overflow-hidden border border-white/10 group transition-all active:scale-[0.99] shadow-2xl"
+             >
+                 {/* Progress Fill Background */}
+                 <div 
+                    className={`absolute inset-0 bg-gradient-to-r ${getProgressGradient()} opacity-20 transition-all duration-500`}
+                    style={{ width: isLocked ? `${progress}%` : '100%', opacity: isLocked ? 0.3 : 0.8 }}
+                 />
+                 
+                 {/* Content */}
+                 <div className="absolute inset-0 flex items-center justify-center gap-3">
+                     {isLocked ? (
+                         <>
+                            <Lock size={20} className="text-white/50" />
+                            <span className="text-white/50 font-medium tracking-wide">
+                                Complete Sub-tasks ({completedSub}/{totalSub})
+                            </span>
+                         </>
+                     ) : (
+                         <>
+                            <CheckCircle size={24} className="text-white drop-shadow-md" />
+                            <span className="text-white font-bold text-lg tracking-wide drop-shadow-md">
+                                COMPLETE GOAL
+                            </span>
+                         </>
+                     )}
+                 </div>
+
+                 {/* Shine Effect when ready */}
+                 {!isLocked && (
+                     <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full animate-[shimmer_2s_infinite]" />
+                 )}
+             </motion.button>
+         )}
       </div>
 
       {/* History Modal */}

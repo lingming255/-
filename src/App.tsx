@@ -2,6 +2,8 @@ import { useState, useMemo, useEffect } from 'react';
 import AscensionCanvas from './components/AscensionCanvas';
 import UI from './components/UI';
 import { GoalCanvas } from './components/GoalTree/GoalCanvas';
+import { TaskDashboard } from './components/TaskDashboard/TaskDashboard';
+import { TaskHUD } from './components/TaskDashboard/TaskHUD';
 import { useTimeSystem } from './hooks/useTimeSystem';
 import { getTimePhase, getSkyGradient } from './utils/environment';
 import { WeatherType } from './types';
@@ -13,6 +15,7 @@ function App() {
   const [manualWeather, setManualWeather] = useState<WeatherType | null>(null);
   const [autoWeather, setAutoWeather] = useState<WeatherType>('clear');
   const [showMap, setShowMap] = useState(false);
+  const [showDashboard, setShowDashboard] = useState(false);
   
   const phase = getTimePhase(time);
   
@@ -70,11 +73,18 @@ function App() {
         environment={environment}
         colorTheme={colorTheme}
       />
+      
       <UI 
         onWeatherToggle={toggleWeather} 
         currentWeather={weather} 
         onOpenMap={() => setShowMap(true)} 
       />
+      
+      {!showMap && !showDashboard && (
+        <TaskHUD onOpenDashboard={() => setShowDashboard(true)} />
+      )}
+
+      <TaskDashboard isOpen={showDashboard} onClose={() => setShowDashboard(false)} />
       
       {showMap && (
         <GoalCanvas onClose={() => setShowMap(false)} />

@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { generateId } from '../utils/helpers';
+import { Goal, Priority, SubGoal } from '../types';
+export type { Goal, Priority, SubGoal };
 
 export interface DailyLog {
   id: string;
@@ -11,24 +13,6 @@ export interface DailyLog {
   linkedGoalId?: string | null; // Link to the specific goal ID
 }
 
-export interface SubGoal {
-  id: string;
-  content: string;
-  isCompleted: boolean;
-}
-
-export interface Goal {
-  id: string;
-  content: string;
-  parentIds: string[];
-  isCompleted: boolean;
-  completedAt?: string;
-  createdAt: string;
-  isToday: boolean;
-  subGoals: SubGoal[];
-  position: { x: number; y: number };
-}
-
 export type ViewMode = 'diagonal' | 'vertical';
 export type StairStyle = 'minimal' | 'ethereal' | 'solid';
 export type EnvironmentType = 'countryside' | 'city' | 'mountain' | 'desert' | 'beach' | 'rainforest';
@@ -37,6 +21,8 @@ export type ColorTheme = 'midnight' | 'bamboo' | 'sunset';
 export interface GameState {
   goals: Goal[];
   activeGoalId: string | null;
+  focusedGoalId: string | null; // For Focus Mode (Drill-down)
+  taskOrder: string[]; // Global custom sort order
   dailyLogs: DailyLog[];
   weatherOverride: string | null;
   viewMode: ViewMode;
@@ -50,6 +36,9 @@ export interface GameState {
   deleteGoal: (id: string) => void;
   unlinkGoal: (id: string) => void;
   setActiveGoal: (id: string | null) => void;
+  setFocusedGoalId: (id: string | null) => void;
+  setTaskOrder: (order: string[]) => void;
+  setGoalPriority: (id: string, priority: Priority) => void;
   completeGoal: (id: string) => void;
   toggleGoalToday: (id: string) => void;
   
@@ -58,9 +47,6 @@ export interface GameState {
   toggleSubGoal: (goalId: string, subGoalId: string) => void;
   deleteSubGoal: (goalId: string, subGoalId: string) => void;
   
-  // Legacy Wrappers (to maintain compatibility with some UI calls if needed, though we'll update UI)
-  // We'll update the UI to use the new actions.
-
   addDailyLog: (content: string) => void;
   setWeatherOverride: (weather: string | null) => void;
   setViewMode: (mode: ViewMode) => void;
@@ -72,6 +58,7 @@ export interface GameState {
   deleteDailyLog: (id: string) => void;
 
   exportData: () => void;
+  importData: (data: any) => boolean;
 }
 
 export const useGameStore = create<GameState>()(
@@ -79,6 +66,8 @@ export const useGameStore = create<GameState>()(
     (set, get) => ({
       goals: [],
       activeGoalId: null,
+      focusedGoalId: null,
+      taskOrder: [],
       dailyLogs: [],
       weatherOverride: null,
       viewMode: 'diagonal',
@@ -93,6 +82,7 @@ export const useGameStore = create<GameState>()(
           content,
           parentIds: parentId ? [parentId] : [],
           isCompleted: false,
+          priority: 'P2', // Default priority
           createdAt: new Date().toISOString(),
           isToday: false,
           subGoals: [],
@@ -196,15 +186,38 @@ export const useGameStore = create<GameState>()(
         }
       },
 
+      setFocusedGoalId: (id) => {
+        set({ focusedGoalId: id });
+      },
+
+      setTaskOrder: (order) => {
+        set({ taskOrder: order });
+      },
+
+      setGoalPriority: (id, priority) => {
+        const { goals } = get();
+        set({
+          goals: goals.map(g => g.id === id ? { ...g, priority } : g)
+        });
+      },
+
       completeGoal: (id) => {
         const { goals, activeGoalId } = get();
+        const goal = goals.find(g => g.id === id);
+        
+        // Block completion if there are incomplete sub-goals
+        if (goal && goal.subGoals && goal.subGoals.some(sg => !sg.isCompleted)) {
+            // Visual feedback handled by UI component, but store should also enforce
+            return; 
+        }
+
         set({
           goals: goals.map(g => g.id === id ? { 
             ...g, 
             isCompleted: true, 
             completedAt: new Date().toISOString() 
           } : g),
-          activeGoalId: activeGoalId === id ? null : activeGoalId // Clear active goal if it's the one being completed
+          activeGoalId: activeGoalId === id ? null : activeGoalId 
         });
       },
       
@@ -276,24 +289,45 @@ export const useGameStore = create<GameState>()(
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
       },
+
+      importData: (data: any) => {
+        try {
+          // Basic validation
+          if (!data || !Array.isArray(data.goals)) {
+            console.error('Invalid save data format');
+            return false;
+          }
+          
+          set({
+            goals: data.goals || [],
+            activeGoalId: data.activeGoalId || null,
+            dailyLogs: data.dailyLogs || [],
+            weatherOverride: data.weatherOverride || null,
+            viewMode: data.viewMode || 'diagonal',
+            stairStyle: data.stairStyle || 'minimal',
+            environment: data.environment || 'countryside',
+            colorTheme: data.colorTheme || 'midnight',
+          });
+          return true;
+        } catch (e) {
+          console.error('Failed to import data:', e);
+          return false;
+        }
+      },
     }),
     {
       name: 'ascension-storage',
       storage: createJSONStorage(() => localStorage),
-      version: 3,
+      version: 5,
       migrate: (persistedState: any, version) => {
+        // Handle migration to version 3 first (existing logic)
+        let state = persistedState as any;
+        
         if (version === 0 || version === 1 || version === 2 || !version) {
-          // Migration from version 1 or 2 (or unversioned)
-          const oldState = persistedState as any;
-          
-          // Pre-process for v2->v3: Convert parentId to parentIds
-          // If we are coming from v2, goals might already exist.
-          // If we are coming from v0/v1, we do the migration logic below, BUT we need to adapt it to produce parentIds.
-          
+          const oldState = state;
           let goals: Goal[] = [];
           let activeGoalId: string | null = null;
           
-          // If we have goals from v2 state, use them but convert parentId
           if (oldState.goals && Array.isArray(oldState.goals)) {
               goals = oldState.goals.map((g: any) => ({
                   ...g,
@@ -303,8 +337,7 @@ export const useGameStore = create<GameState>()(
               }));
               activeGoalId = oldState.activeGoalId;
           } else {
-              // v0/v1 Migration Logic (Legacy)
-              // 1. Migrate currentGoal
+              // Legacy migration
               if (oldState.currentGoal) {
                  const newId = generateId();
                  goals.push({
@@ -315,12 +348,11 @@ export const useGameStore = create<GameState>()(
                      createdAt: new Date().toISOString(),
                      isToday: true, 
                      subGoals: [],
-                     position: { x: 0, y: 0 }
-                 });
+                     position: { x: 0, y: 0 },
+                     priority: 'P2' // Default
+                 } as Goal);
                  activeGoalId = newId;
               }
-              
-              // 2. Migrate completedGoals
               if (Array.isArray(oldState.completedGoals)) {
                   oldState.completedGoals.forEach((cg: any, index: number) => {
                       goals.push({
@@ -332,20 +364,38 @@ export const useGameStore = create<GameState>()(
                           createdAt: cg.completedAt,
                           isToday: false,
                           subGoals: [],
-                          position: { x: (index + 1) * 200, y: 0 }
-                      });
+                          position: { x: (index + 1) * 200, y: 0 },
+                          priority: 'P2'
+                      } as Goal);
                   });
               }
           }
           
-          return {
+          state = {
               ...oldState,
               goals,
               activeGoalId,
               version: 3
           };
         }
-        return persistedState as GameState;
+
+        // Migration from v3 to v4 (Add priority)
+        if (state.version === 3 || !state.version) {
+            state.goals = state.goals.map((g: any) => ({
+                ...g,
+                priority: g.priority || 'P2'
+            }));
+            state.version = 4;
+            state.focusedGoalId = null;
+        }
+
+        // Migration from v4 to v5 (Add taskOrder)
+        if (state.version === 4) {
+            state.taskOrder = state.taskOrder || [];
+            state.version = 5;
+        }
+        
+        return state as GameState;
       }
     }
   )
