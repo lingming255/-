@@ -28,10 +28,13 @@ if not exist "node_modules" (
     )
 )
 
-:: 3. 检查构建产物
-if not exist "dist" (
-    echo [信息] 正在构建项目...
-    call npm run build
+:: 3. 构建项目 (确保运行最新版本)
+echo [信息] 正在构建最新版本...
+call npm run build
+if %errorlevel% neq 0 (
+    echo [错误] 构建失败。
+    pause
+    exit
 )
 
 :: 4. 打开浏览器 (延迟 2 秒执行，等待服务启动)
