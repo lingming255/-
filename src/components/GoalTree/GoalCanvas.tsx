@@ -1,79 +1,104 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { useGameStore, Goal } from '../../store/gameStore';
 import { GoalNode } from './GoalNode';
 import { CustomPrompt } from '../CustomPrompt';
 import { ProjectSidebar } from './ProjectSidebar';
 import { getSubTreeIds, getAncestors } from '../../utils/treeHelpers';
-import { X, Plus, Locate, Home, ChevronRight as ChevronRightIcon } from 'lucide-react';
+import { calculateTreeLayout } from '../../utils/autoLayout';
+import { X, Plus, Locate, Home, ChevronRight as ChevronRightIcon, LayoutTemplate } from 'lucide-react';
 
 interface GoalCanvasProps {
   onClose: () => void;
 }
 
+// Helper: Check if line segments intersect
+const segmentsIntersect = (
+    a: {x: number, y: number}, b: {x: number, y: number},
+    c: {x: number, y: number}, d: {x: number, y: number}
+) => {
+    const det = (b.x - a.x) * (d.y - c.y) - (d.x - c.x) * (b.y - a.y);
+    if (det === 0) return false;
+    const lambda = ((d.y - c.y) * (d.x - a.x) + (c.x - d.x) * (d.y - a.y)) / det;
+    const gamma = ((a.y - b.y) * (d.x - a.x) + (b.x - a.x) * (d.y - a.y)) / det;
+    return (0 < lambda && lambda < 1) && (0 < gamma && gamma < 1);
+};
+
 export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
   const { 
     goals, 
     updateGoal, 
+    updateGoals,
     activeGoalId, 
     setActiveGoal, 
     toggleGoalToday, 
     addGoal, 
     deleteGoal,
+    deleteGoals,
     focusedGoalId,
     setFocusedGoalId,
     scrollToId,
-    setScrollToId
+    setScrollToId,
+    selectedGoalIds,
+    setSelectedGoalIds,
+    disconnectGoal,
+    unlinkGoal,
+    undo,
+    redo,
+    snapshot
   } = useGameStore();
 
+  // View State
   const [view, setView] = useState({ x: window.innerWidth / 2, y: 100, scale: 1 });
-  const [isPanning, setIsPanning] = useState(false);
-  const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [connectingId, setConnectingId] = useState<string | null>(null);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 }); // Screen coords
-  const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 }); // Screen coords for line
   
+  // Interaction State
+  type InteractionMode = 'none' | 'pan' | 'select' | 'drag' | 'connect' | 'cut';
+  const [mode, setMode] = useState<InteractionMode>('none');
+  
+  // Interaction Data
+  const [startPos, setStartPos] = useState({ x: 0, y: 0 }); // Screen coords at start
+  const [currentPos, setCurrentPos] = useState({ x: 0, y: 0 }); // Screen coords current
+  
+  // Selection
+  const [selectionBox, setSelectionBox] = useState<{start: {x:number, y:number}, current: {x:number, y:number}} | null>(null);
+  
+  // Cutting
+  const [cutLine, setCutLine] = useState<{start: {x:number, y:number}, end: {x:number, y:number}} | null>(null);
+  
+  // Connecting
+  const [connectingId, setConnectingId] = useState<string | null>(null);
   const [hoveredTargetId, setHoveredTargetId] = useState<string | null>(null);
+
   const [isPromptOpen, setIsPromptOpen] = useState(false);
   
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Handle ScrollToId
-  React.useEffect(() => {
-    if (scrollToId) {
-        // 1. Ensure the goal is visible (might be inside a focused subtree)
-        // If we are in focus mode, we might need to exit it OR check if target is inside.
-        // For simplicity, let's exit focus mode if target is not found in visibleGoals
-        // But visibleGoals depends on focusedGoalId.
+  // Global Shortcuts (Undo/Redo/Delete)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+        // Ignore if typing in an input
+        if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
         
-        // Actually, let's just find it in global goals first.
-        const target = goals.find(g => g.id === scrollToId);
-        if (target) {
-            // Check if we need to change focus
-            // If focusedGoalId is set, check if target is a descendant
-            // If not, we might need to reset focus or switch focus.
-            // For now, let's just reset focus if not visible.
-            
-            // NOTE: visibleGoals is memoized. We can't easily check "is visible" synchronously here before render.
-            // So we'll force view update assuming it will be rendered.
-            
-            // To be safe, if we are in Drill-down, we might want to exit it to show the global node.
-            // setFocusedGoalId(null); // Optional: Force global view? User might find this jarring.
-            
-            // Calculate center position
-            const targetX = target.position.x;
-            const targetY = target.position.y;
-            
-            setView({
-                x: window.innerWidth / 2 - targetX * view.scale - 110 * view.scale,
-                y: window.innerHeight / 2 - targetY * view.scale - 50 * view.scale,
-                scale: view.scale
-            });
-            
-            // Clear the request
-            setScrollToId(null);
+        // Undo/Redo
+        if (e.ctrlKey && (e.key === 'z' || e.key === 'Z')) {
+            e.preventDefault();
+            if (e.shiftKey) {
+                redo();
+            } else {
+                undo();
+            }
         }
-    }
-  }, [scrollToId, goals, view.scale]);
+        
+        // Delete
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+            if (selectedGoalIds.length > 0) {
+                deleteGoals(selectedGoalIds);
+            }
+        }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undo, redo, selectedGoalIds, deleteGoals]);
 
   // Focus Mode Logic
   const visibleGoals = useMemo(() => {
@@ -87,16 +112,36 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
     return getAncestors(focusedGoalId, goals);
   }, [focusedGoalId, goals]);
 
-  // Helper to convert screen to world coordinates
-  const screenToWorld = (sx: number, sy: number) => {
-    return {
+  // Handle ScrollToId
+  useEffect(() => {
+    if (scrollToId) {
+        const target = goals.find(g => g.id === scrollToId);
+        if (target) {
+            const targetX = target.position.x;
+            const targetY = target.position.y;
+            setView({
+                x: window.innerWidth / 2 - targetX * view.scale - 110 * view.scale,
+                y: window.innerHeight / 2 - targetY * view.scale - 50 * view.scale,
+                scale: view.scale
+            });
+            setScrollToId(null);
+        }
+    }
+  }, [scrollToId, goals, view.scale, setScrollToId]);
+
+  // Coordinate Helpers
+  const screenToWorld = (sx: number, sy: number) => ({
       x: (sx - view.x) / view.scale,
       y: (sy - view.y) / view.scale
-    };
-  };
+  });
 
+  const worldToScreen = (wx: number, wy: number) => ({
+      x: wx * view.scale + view.x,
+      y: wy * view.scale + view.y
+  });
+
+  // Event Handlers
   const handleWheel = (e: React.WheelEvent) => {
-    // Zoom
     e.stopPropagation();
     const zoomSensitivity = 0.001;
     const newScale = Math.min(Math.max(view.scale - e.deltaY * zoomSensitivity, 0.2), 3);
@@ -104,156 +149,216 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
   };
 
   const handlePointerDown = (e: React.PointerEvent) => {
-    // Centralized Event Handling
     const target = e.target as HTMLElement;
     const nodeEl = target.closest('[data-type="node"]');
     const handleEl = target.closest('[data-type="handle"]');
     
-    // Always capture pointer on the container to ensure we receive move/up events
     containerRef.current?.setPointerCapture(e.pointerId);
+    setStartPos({ x: e.clientX, y: e.clientY });
+    setCurrentPos({ x: e.clientX, y: e.clientY });
 
-    if (e.button === 0 && handleEl) {
-        // Start Connecting
-        const id = handleEl.getAttribute('data-id');
-        if (id) {
-            setConnectingId(id);
-            setCursorPos({ x: e.clientX, y: e.clientY });
-            e.preventDefault();
-            e.stopPropagation(); // Stop propagation to prevent panning start
+    // Middle Mouse -> PAN
+    if (e.button === 1) {
+        setMode('pan');
+        return;
+    }
+
+    // Right Mouse -> CUT
+    if (e.button === 2) {
+        setMode('cut');
+        setCutLine({ 
+            start: screenToWorld(e.clientX, e.clientY), 
+            end: screenToWorld(e.clientX, e.clientY) 
+        });
+        return;
+    }
+
+    // Left Mouse
+    if (e.button === 0) {
+        if (handleEl) {
+            // Start Connection
+            const id = handleEl.getAttribute('data-id');
+            if (id) {
+                setConnectingId(id);
+                setMode('connect');
+                e.stopPropagation();
+            }
+        } else if (nodeEl) {
+            // Start Dragging Node
+            const id = nodeEl.getAttribute('data-id');
+            if (id) {
+                // Selection Logic
+                let newSelection = [...selectedGoalIds];
+                if (e.shiftKey) {
+                    if (newSelection.includes(id)) {
+                        newSelection = newSelection.filter(sid => sid !== id);
+                    } else {
+                        newSelection.push(id);
+                    }
+                } else {
+                    if (!newSelection.includes(id)) {
+                        newSelection = [id];
+                    }
+                }
+                setSelectedGoalIds(newSelection);
+                
+                // SNAPSHOT for Undo History (Atomic Drag)
+                snapshot();
+
+                setMode('drag');
+                e.stopPropagation();
+            }
+        } else {
+            // Background Click -> Start Selection Box
+            setMode('select');
+            setSelectionBox({ 
+                start: { x: e.clientX, y: e.clientY }, 
+                current: { x: e.clientX, y: e.clientY } 
+            });
+            // Clear selection if not holding shift? 
+            // User requested: "Left click box select". Usually implies clearing unless Shift.
+            if (!e.shiftKey) {
+                setSelectedGoalIds([]);
+            }
         }
-    } else if (e.button === 0 && nodeEl) {
-        // Start Dragging Node
-        const id = nodeEl.getAttribute('data-id');
-        if (id) {
-            setDraggingId(id);
-            setDragStart({ x: e.clientX, y: e.clientY });
-            e.preventDefault();
-        }
-    } else if (e.button === 1 || e.button === 2 || e.button === 0) {
-        // Pan
-        setIsPanning(true);
-        setDragStart({ x: e.clientX, y: e.clientY });
     }
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (draggingId) {
-      const dx = (e.clientX - dragStart.x) / view.scale;
-      const dy = (e.clientY - dragStart.y) / view.scale;
-      
-      const goal = goals.find(g => g.id === draggingId);
-      if (goal) {
-        updateGoal(draggingId, {
-          position: {
-            x: goal.position.x + dx,
-            y: goal.position.y + dy
-          }
-        });
-      }
-      setDragStart({ x: e.clientX, y: e.clientY });
-    } else if (connectingId) {
-       // Force re-render for line update
-       setCursorPos({ x: e.clientX, y: e.clientY });
-       
-       // Hit Test for highlighting
-       const worldPos = screenToWorld(e.clientX, e.clientY);
-       const target = visibleGoals.find(g => {
-         if (g.id === connectingId) return false;
-         return (
-           worldPos.x >= g.position.x && 
-           worldPos.x <= g.position.x + 220 &&
-           worldPos.y >= g.position.y &&
-           worldPos.y <= g.position.y + 150
-         );
-       });
-       setHoveredTargetId(target ? target.id : null);
-    } else if (isPanning) {
-      const dx = e.clientX - dragStart.x;
-      const dy = e.clientY - dragStart.y;
-      setView(v => ({ ...v, x: v.x + dx, y: v.y + dy }));
-      setDragStart({ x: e.clientX, y: e.clientY });
-    }
-  };
+    const dx = e.clientX - currentPos.x;
+    const dy = e.clientY - currentPos.y;
+    setCurrentPos({ x: e.clientX, y: e.clientY });
 
-  const handleContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    // Only handle context menu if not dragging or connecting
-    if (connectingId) {
-        setConnectingId(null);
-        setHoveredTargetId(null);
+    if (mode === 'pan') {
+        setView(v => ({ ...v, x: v.x + dx, y: v.y + dy }));
+    } 
+    else if (mode === 'drag') {
+        // Move all selected nodes
+        const worldDx = dx / view.scale;
+        const worldDy = dy / view.scale;
+        
+        const updates = selectedGoalIds.map(id => {
+            const goal = goals.find(g => g.id === id);
+            if (!goal) return null;
+            return {
+                id,
+                changes: {
+                    position: {
+                        x: goal.position.x + worldDx,
+                        y: goal.position.y + worldDy
+                    }
+                }
+            };
+        }).filter(Boolean) as {id: string, changes: Partial<Goal>}[];
+        
+        if (updates.length > 0) {
+            // IMPORTANT: Skip history snapshot during drag updates to avoid spamming history stack
+            updateGoals(updates, true);
+        }
+    }
+    else if (mode === 'select' && selectionBox) {
+        setSelectionBox({ ...selectionBox, current: { x: e.clientX, y: e.clientY } });
+    }
+    else if (mode === 'connect' && connectingId) {
+        // Hit Test
+        const worldPos = screenToWorld(e.clientX, e.clientY);
+        const target = visibleGoals.find(g => {
+            if (g.id === connectingId) return false;
+            return (
+                worldPos.x >= g.position.x && 
+                worldPos.x <= g.position.x + 220 &&
+                worldPos.y >= g.position.y &&
+                worldPos.y <= g.position.y + 150
+            );
+        });
+        setHoveredTargetId(target ? target.id : null);
+    }
+    else if (mode === 'cut') {
+        const worldPos = screenToWorld(e.clientX, e.clientY);
+        const prevWorldPos = screenToWorld(e.clientX - dx, e.clientY - dy); // Approx previous frame world pos
+        
+        // Update visual line
+        setCutLine({ start: prevWorldPos, end: worldPos });
+        
+        // Check intersections with all connections
+        visibleGoals.forEach(child => {
+            child.parentIds.forEach(parentId => {
+                const parent = goals.find(g => g.id === parentId);
+                if (!parent) return;
+                
+                // Connection Line Segment
+                // Simplified: Start (Parent Center Bottom) -> End (Child Center Top)
+                const pStart = { x: parent.position.x + 110, y: parent.position.y + 80 }; // Handle
+                const pEnd = { x: child.position.x + 110, y: child.position.y }; // Top center
+                
+                // Cut Line Segment (Previous frame mouse -> Current mouse)
+                // We use the movement vector as the blade
+                if (segmentsIntersect(prevWorldPos, worldPos, pStart, pEnd)) {
+                    disconnectGoal(child.id, parent.id);
+                }
+            });
+        });
     }
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
     containerRef.current?.releasePointerCapture(e.pointerId);
-    
-    if (draggingId) {
-      setDraggingId(null);
-    } else if (connectingId) {
-      // Hit Test
-      const worldPos = screenToWorld(e.clientX, e.clientY);
-      // We check all nodes to see if we dropped on one
-      const target = visibleGoals.find(g => {
-        if (g.id === connectingId) return false; // Can't link to self
-        return (
-          worldPos.x >= g.position.x && 
-          worldPos.x <= g.position.x + 220 &&
-          worldPos.y >= g.position.y &&
-          worldPos.y <= g.position.y + 150 // Increased hit area height
-        );
-      });
 
-      if (target) {
-        // Check if connection already exists to avoid duplicates
-        if (!target.parentIds.includes(connectingId)) {
-            const newParentIds = [...target.parentIds, connectingId];
-            updateGoal(target.id, { parentIds: newParentIds });
-        }
-      }
-      setConnectingId(null);
-      setHoveredTargetId(null);
-    } else if (isPanning) {
-      setIsPanning(false);
-    }
-  };
-
-  const handleAddGoalClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setIsPromptOpen(true);
-  };
-
-  const handlePromptConfirm = (content: string) => {
-    if (content && content.trim()) {
-        const cx = window.innerWidth / 2;
-        const cy = window.innerHeight / 2;
-        let pos = { x: 0, y: 0 };
+    if (mode === 'select' && selectionBox) {
+        // Calculate selection
+        // Normalize box
+        const x1 = Math.min(selectionBox.start.x, selectionBox.current.x);
+        const x2 = Math.max(selectionBox.start.x, selectionBox.current.x);
+        const y1 = Math.min(selectionBox.start.y, selectionBox.current.y);
+        const y2 = Math.max(selectionBox.start.y, selectionBox.current.y);
         
-        try {
-            const center = screenToWorld(cx, cy);
-            pos = { x: center.x - 110, y: center.y - 40 };
-        } catch (err) {
-            console.warn("screenToWorld failed, using zero:", err);
+        const newSelected = visibleGoals.filter(g => {
+            const screenPos = worldToScreen(g.position.x, g.position.y);
+            // Check if center or any part is in box? Let's check center point for simplicity + size
+            // Let's use the node center
+            const cx = screenPos.x + 110 * view.scale;
+            const cy = screenPos.y + 75 * view.scale;
+            return cx >= x1 && cx <= x2 && cy >= y1 && cy <= y2;
+        }).map(g => g.id);
+        
+        // Merge if shift?
+        if (e.shiftKey) {
+            const set = new Set([...selectedGoalIds, ...newSelected]);
+            setSelectedGoalIds(Array.from(set));
+        } else {
+            setSelectedGoalIds(newSelected);
         }
-
-        // If in focus mode, add as child of focused goal?
-        // User might expect this.
-        const parentId = focusedGoalId;
-
-        const newId = addGoal(content, parentId, pos);
-        console.log("Goal added:", newId);
+        setSelectionBox(null);
     }
-    setIsPromptOpen(false);
+    else if (mode === 'connect' && connectingId) {
+         // Finalize connection
+         const worldPos = screenToWorld(e.clientX, e.clientY);
+         const target = visibleGoals.find(g => {
+             if (g.id === connectingId) return false;
+             return (
+                 worldPos.x >= g.position.x && 
+                 worldPos.x <= g.position.x + 220 &&
+                 worldPos.y >= g.position.y &&
+                 worldPos.y <= g.position.y + 150
+             );
+         });
+         
+         if (target) {
+             if (!target.parentIds.includes(connectingId)) {
+                 updateGoal(target.id, { parentIds: [...target.parentIds, connectingId] });
+             }
+         }
+         setConnectingId(null);
+         setHoveredTargetId(null);
+    }
+    
+    setMode('none');
+    setCutLine(null);
   };
-  
-  const centerOnActive = () => {
-      const active = visibleGoals.find(g => g.id === activeGoalId);
-      if (active) {
-          setView({
-              x: window.innerWidth / 2 - active.position.x * view.scale - 110 * view.scale,
-              y: window.innerHeight / 2 - active.position.y * view.scale - 50 * view.scale,
-              scale: 1
-          });
-      }
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+      e.preventDefault();
+      // Right click is now used for CUT, so we suppress context menu
   };
 
   const handleSelectProject = (id: string) => {
@@ -268,12 +373,22 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
     }
   };
 
-  // Draw Lines
+  // Auto Layout
+  const handleAutoLayout = () => {
+      // updateGoals will snapshot by default, making this atomic
+      const updates = calculateTreeLayout(goals);
+      const goalUpdates = updates.map(u => ({
+          id: u.id,
+          changes: { position: u.position }
+      }));
+      updateGoals(goalUpdates);
+  };
+
+  // Render Helpers
   const connections = useMemo(() => {
     return visibleGoals.flatMap(g => {
       if (!g.parentIds || g.parentIds.length === 0) return [];
       return g.parentIds.map(parentId => {
-          // If in focus mode, ensure parent is also visible
           const parent = visibleGoals.find(p => p.id === parentId);
           if (!parent) return null;
           return { from: parent, to: g };
@@ -284,10 +399,9 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
   return (
     <div className="fixed inset-0 z-50 bg-[#0f172a] overflow-hidden text-white font-sans animate-in fade-in duration-300">
       
-      {/* Sidebar */}
       <ProjectSidebar goals={goals} onSelectProject={handleSelectProject} />
 
-      {/* Breadcrumbs Bar */}
+      {/* Breadcrumbs */}
       {focusedGoalId && (
         <div className="absolute top-0 left-0 right-0 h-14 bg-slate-900/80 backdrop-blur-md border-b border-white/10 z-40 flex items-center px-4 md:pl-72 animate-in slide-in-from-top">
             <button 
@@ -314,11 +428,23 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
 
       {/* Toolbar */}
       <div className="absolute top-4 right-4 z-50 flex gap-2">
-        <button onClick={handleAddGoalClick} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition flex items-center gap-2" title="Add New Goal">
+        <button onClick={handleAutoLayout} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition" title="Auto Layout">
+            <LayoutTemplate size={24} />
+        </button>
+        <button onClick={(e) => { e.stopPropagation(); setIsPromptOpen(true); }} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition flex items-center gap-2" title="Add New Goal">
           <Plus size={24} />
           <span className="text-sm font-medium pr-2">New Goal</span>
         </button>
-        <button onClick={centerOnActive} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition" title="Locate Active">
+        <button onClick={() => {
+            const active = visibleGoals.find(g => g.id === activeGoalId);
+            if (active) {
+                setView({
+                    x: window.innerWidth / 2 - active.position.x * view.scale - 110 * view.scale,
+                    y: window.innerHeight / 2 - active.position.y * view.scale - 50 * view.scale,
+                    scale: 1
+                });
+            }
+        }} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition" title="Locate Active">
             <Locate size={24} />
         </button>
         <button onClick={onClose} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition">
@@ -327,20 +453,26 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
       </div>
       
       <div className="absolute bottom-4 right-4 bg-black/40 px-4 py-2 rounded-full text-xs text-white/50 border border-white/5 pointer-events-none select-none z-40">
-            Double-click node to Focus • Drag background to pan • Scroll to zoom
+            Left: Box Select/Drag • Middle: Pan • Right: Cut Links • Scroll: Zoom • Undo: Ctrl+Z
       </div>
 
       <CustomPrompt 
         isOpen={isPromptOpen}
         title="Create New Goal"
-        onConfirm={handlePromptConfirm}
+        onConfirm={(content) => {
+            if (content && content.trim()) {
+                const center = screenToWorld(window.innerWidth/2, window.innerHeight/2);
+                addGoal(content, focusedGoalId, { x: center.x - 110, y: center.y - 40 });
+            }
+            setIsPromptOpen(false);
+        }}
         onCancel={() => setIsPromptOpen(false)}
       />
 
-      {/* Canvas Area */}
+      {/* Canvas */}
       <div 
         ref={containerRef}
-        className="w-full h-full cursor-grab active:cursor-grabbing touch-none"
+        className={`w-full h-full touch-none outline-none ${mode === 'pan' ? 'cursor-grabbing' : mode === 'cut' ? 'cursor-crosshair' : 'cursor-default'}`}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -357,7 +489,7 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
             pointerEvents: 'none' 
           }}
         >
-          {/* SVG Layer for Connections */}
+          {/* Connections Layer */}
           <svg className="absolute top-0 left-0 w-full h-full overflow-visible pointer-events-none">
              <defs>
                 <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
@@ -384,29 +516,30 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
                 );
              })}
              
-             {/* Temporary Connection Line */}
-             {connectingId && (
+             {/* Connecting Line */}
+             {mode === 'connect' && connectingId && (
                 (() => {
                    const startNode = visibleGoals.find(g => g.id === connectingId);
                    if (!startNode) return null;
-                   
                    const startX = startNode.position.x + 110;
-                   const startY = startNode.position.y + 80; // Approximate handle position (bottom center)
-                   const worldCursor = screenToWorld(cursorPos.x, cursorPos.y);
-                   
+                   const startY = startNode.position.y + 80;
+                   const worldCursor = screenToWorld(currentPos.x, currentPos.y);
                    return (
                       <line 
-                        x1={startX} 
-                        y1={startY} 
-                        x2={worldCursor.x} 
-                        y2={worldCursor.y} 
-                        stroke="#fbbf24" 
-                        strokeWidth="2" 
-                        strokeDasharray="5,5" 
-                        pointerEvents="none"
+                        x1={startX} y1={startY} x2={worldCursor.x} y2={worldCursor.y} 
+                        stroke="#fbbf24" strokeWidth="2" strokeDasharray="5,5" 
                       />
                    );
                 })()
+             )}
+             
+             {/* Cut Line Trail */}
+             {mode === 'cut' && cutLine && (
+                 <line 
+                    x1={cutLine.start.x} y1={cutLine.start.y}
+                    x2={cutLine.end.x} y2={cutLine.end.y}
+                    stroke="#ef4444" strokeWidth="3" strokeLinecap="round"
+                 />
              )}
           </svg>
 
@@ -417,17 +550,36 @@ export const GoalCanvas: React.FC<GoalCanvasProps> = ({ onClose }) => {
                   key={goal.id}
                   goal={goal}
                   isActive={goal.id === activeGoalId}
-                  isSelected={false}
+                  isSelected={selectedGoalIds.includes(goal.id)}
                   isTarget={goal.id === hoveredTargetId}
                   onToggleToday={() => toggleGoalToday(goal.id)}
                   onSetActive={() => setActiveGoal(goal.id)}
-                  onDelete={() => deleteGoal(goal.id)}
-                  onUnlink={() => useGameStore.getState().unlinkGoal(goal.id)}
+                  onDelete={() => {
+                      if (selectedGoalIds.includes(goal.id)) {
+                          deleteGoals(selectedGoalIds);
+                      } else {
+                          deleteGoal(goal.id);
+                      }
+                  }}
+                  onUnlink={() => unlinkGoal(goal.id)}
                   onFocus={() => setFocusedGoalId(goal.id)}
                 />
               ))}
           </div>
         </div>
+
+        {/* UI Overlay for Selection Box */}
+        {mode === 'select' && selectionBox && (
+            <div 
+                className="absolute border border-blue-500 bg-blue-500/20 pointer-events-none z-50"
+                style={{
+                    left: Math.min(selectionBox.start.x, selectionBox.current.x),
+                    top: Math.min(selectionBox.start.y, selectionBox.current.y),
+                    width: Math.abs(selectionBox.current.x - selectionBox.start.x),
+                    height: Math.abs(selectionBox.current.y - selectionBox.start.y),
+                }}
+            />
+        )}
       </div>
     </div>
   );

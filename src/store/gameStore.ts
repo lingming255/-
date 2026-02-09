@@ -41,13 +41,25 @@ export interface GameState {
   timelineDate: string; // YYYY-MM-DD
   highlightedGoalId: string | null; // For Jump-to-Task
   invalidDragId: string | null; // Transient state for invalid drag feedback
+  selectedGoalIds: string[]; // Multi-selection support
   
+  // History
+  pastGoals: Goal[][];
+  futureGoals: Goal[][];
+  undo: () => void;
+  redo: () => void;
+  snapshot: () => void;
+
   // Goal Actions
   addGoal: (content: string, parentId?: string | null, position?: { x: number, y: number }) => string;
   updateGoal: (id: string, updates: Partial<Goal>) => void;
+  updateGoals: (updates: {id: string, changes: Partial<Goal>}[], skipHistory?: boolean) => void; // Batch update
   deleteGoal: (id: string) => void;
+  deleteGoals: (ids: string[]) => void; // Batch delete
   unlinkGoal: (id: string) => void;
+  disconnectGoal: (childId: string, parentId: string) => void; // Precise unlink
   setActiveGoal: (id: string | null) => void;
+  setSelectedGoalIds: (ids: string[]) => void;
   setFocusedGoalId: (id: string | null) => void;
   setScrollToId: (id: string | null) => void;
   setTaskOrder: (order: string[]) => void;
@@ -108,8 +120,50 @@ export const useGameStore = create<GameState>()(
       timelineDate: getLocalDateString(),
       highlightedGoalId: null,
       invalidDragId: null,
+      selectedGoalIds: [],
+      pastGoals: [],
+      futureGoals: [],
+
+      undo: () => {
+        const { pastGoals, futureGoals, goals } = get();
+        if (pastGoals.length === 0) return;
+        
+        const previous = pastGoals[pastGoals.length - 1];
+        const newPast = pastGoals.slice(0, -1);
+        
+        set({
+            goals: previous,
+            pastGoals: newPast,
+            futureGoals: [goals, ...futureGoals]
+        });
+      },
+
+      redo: () => {
+        const { pastGoals, futureGoals, goals } = get();
+        if (futureGoals.length === 0) return;
+
+        const next = futureGoals[0];
+        const newFuture = futureGoals.slice(1);
+
+        set({
+            goals: next,
+            pastGoals: [...pastGoals, goals],
+            futureGoals: newFuture
+        });
+      },
+
+      snapshot: () => {
+        const { goals, pastGoals } = get();
+        // Limit history size? Let's say 50
+        const newPast = [...pastGoals, goals].slice(-50);
+        set({
+            pastGoals: newPast,
+            futureGoals: []
+        });
+      },
 
       addGoal: (content, parentId = null, position = { x: 0, y: 0 }) => {
+        get().snapshot();
         const { goals } = get();
         const newGoal: Goal = {
           id: generateId(),
@@ -133,6 +187,7 @@ export const useGameStore = create<GameState>()(
       },
 
       addSubGoal: (goalId, content) => {
+        get().snapshot();
         const { goals } = get();
         set({
           goals: goals.map(g => {
@@ -153,6 +208,7 @@ export const useGameStore = create<GameState>()(
       },
 
       toggleSubGoal: (goalId, subGoalId) => {
+        get().snapshot();
         const { goals } = get();
         set({
           goals: goals.map(g => {
@@ -168,6 +224,7 @@ export const useGameStore = create<GameState>()(
       },
 
       deleteSubGoal: (goalId, subGoalId) => {
+        get().snapshot();
         const { goals } = get();
         set({
           goals: goals.map(g => {
@@ -181,6 +238,7 @@ export const useGameStore = create<GameState>()(
       },
 
       reorderSubGoals: (goalId, newSubGoals) => {
+        get().snapshot();
         const { goals } = get();
         set({
             goals: goals.map(g => {
@@ -191,14 +249,30 @@ export const useGameStore = create<GameState>()(
       },
 
       updateGoal: (id, updates) => {
+        get().snapshot();
         const { goals } = get();
         set({
           goals: goals.map(g => g.id === id ? { ...g, ...updates } : g)
         });
       },
 
+      updateGoals: (updates, skipHistory = false) => {
+        if (!skipHistory) get().snapshot();
+        const { goals } = get();
+        // Create a map for faster lookup
+        const updatesMap = new Map(updates.map(u => [u.id, u.changes]));
+        
+        set({
+            goals: goals.map(g => {
+                const changes = updatesMap.get(g.id);
+                return changes ? { ...g, ...changes } : g;
+            })
+        });
+      },
+
       deleteGoal: (id) => {
-        const { goals, activeGoalId } = get();
+        get().snapshot();
+        const { goals, activeGoalId, selectedGoalIds } = get();
         // Remove the deleted goal ID from any parentIds arrays
         const newGoals = goals.filter(g => g.id !== id).map(g => ({
             ...g,
@@ -207,14 +281,45 @@ export const useGameStore = create<GameState>()(
         
         set({
           goals: newGoals,
-          activeGoalId: activeGoalId === id ? null : activeGoalId
+          activeGoalId: activeGoalId === id ? null : activeGoalId,
+          selectedGoalIds: selectedGoalIds.filter(sid => sid !== id)
+        });
+      },
+
+      deleteGoals: (ids) => {
+        get().snapshot();
+        const { goals, activeGoalId, selectedGoalIds } = get();
+        const idsSet = new Set(ids);
+        
+        // Remove goals and update parent references
+        const newGoals = goals.filter(g => !idsSet.has(g.id)).map(g => ({
+            ...g,
+            parentIds: g.parentIds.filter(pid => !idsSet.has(pid))
+        }));
+
+        set({
+            goals: newGoals,
+            activeGoalId: idsSet.has(activeGoalId || '') ? null : activeGoalId,
+            selectedGoalIds: selectedGoalIds.filter(sid => !idsSet.has(sid))
         });
       },
 
       unlinkGoal: (id) => {
+        get().snapshot();
         const { goals } = get();
         set({
           goals: goals.map(g => g.id === id ? { ...g, parentIds: [] } : g)
+        });
+      },
+
+      disconnectGoal: (childId, parentId) => {
+        get().snapshot();
+        const { goals } = get();
+        set({
+            goals: goals.map(g => {
+                if (g.id !== childId) return g;
+                return { ...g, parentIds: g.parentIds.filter(pid => pid !== parentId) };
+            })
         });
       },
 
@@ -232,6 +337,10 @@ export const useGameStore = create<GameState>()(
 
       setFocusedGoalId: (id) => {
         set({ focusedGoalId: id });
+      },
+
+      setSelectedGoalIds: (ids) => {
+        set({ selectedGoalIds: ids });
       },
 
       setScrollToId: (id) => {
@@ -317,6 +426,7 @@ export const useGameStore = create<GameState>()(
       },
 
       setGoalPriority: (id, priority) => {
+        get().snapshot();
         const { goals } = get();
         set({
           goals: goals.map(g => g.id === id ? { ...g, priority } : g)
@@ -332,6 +442,8 @@ export const useGameStore = create<GameState>()(
             // Visual feedback handled by UI component, but store should also enforce
             return; 
         }
+
+        get().snapshot();
 
         // Determine next active goal (Parent)
         const parentId = goal?.parentIds?.[0];
@@ -352,6 +464,7 @@ export const useGameStore = create<GameState>()(
       },
       
       toggleGoalToday: (id) => {
+        get().snapshot();
         const { goals } = get();
         set({
           goals: goals.map(g => g.id === id ? { ...g, isToday: !g.isToday } : g)
@@ -466,6 +579,8 @@ export const useGameStore = create<GameState>()(
             scrollToId, 
             highlightedGoalId, 
             invalidDragId, 
+            pastGoals,
+            futureGoals,
             ...persistedState 
         } = state;
         return persistedState;
